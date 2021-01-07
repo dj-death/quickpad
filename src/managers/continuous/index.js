@@ -2,6 +2,7 @@ import {extend, defer, requestAnimationFrame, nextSection, prevSection} from "..
 import DefaultViewManager from "../default/index";
 import { EVENTS } from "../../utils/constants";
 import debounce from "lodash/debounce";
+import Snap from "../helpers/snap";
 
 class ContinuousViewManager extends DefaultViewManager {
 	constructor(options) {
@@ -17,7 +18,9 @@ class ContinuousViewManager extends DefaultViewManager {
 			offset: 500,
 			offsetDelta: 250,
 			width: undefined,
-			height: undefined
+            height: undefined,
+			snap: false,
+			afterScrolledTimeout: 10
 		});
 
 		extend(this.settings, options.settings || {});
@@ -76,11 +79,11 @@ class ContinuousViewManager extends DefaultViewManager {
 		// let offsetY = 0;
 
 		if(!this.isPaginated) {
-			distY = offset.top;
-			// offsetY = offset.top+this.settings.offset;
+            distY = offset.top;
+            offsetY = offset.top+this.settings.offsetDelta;
 		} else {
 			distX = Math.floor(offset.left / this.layout.delta) * this.layout.delta;
-			// offsetX = distX+this.settings.offset;
+            offsetX = distX+this.settings.offsetDelta;
 		}
 
 		if (distX > 0 || distY > 0) {
@@ -128,11 +131,9 @@ class ContinuousViewManager extends DefaultViewManager {
 			view.expanded = true;
 		});
 
-		/*
 		view.on(EVENTS.VIEWS.AXIS, (axis) => {
 			this.updateAxis(axis);
 		});
-		*/
 
 		this.views.append(view);
 
@@ -149,11 +150,9 @@ class ContinuousViewManager extends DefaultViewManager {
 			view.expanded = true;
 		});
 
-		/*
 		view.on(EVENTS.VIEWS.AXIS, (axis) => {
 			this.updateAxis(axis);
 		});
-		*/
 
 		this.views.prepend(view);
 
@@ -285,15 +284,14 @@ class ContinuousViewManager extends DefaultViewManager {
 		}
 
 		let promises = newViews.map((view) => {
-			return view.displayed;
+            // return view.displayed;
+            return view.display(this.request);
 		});
 
 		if(newViews.length){
 			return Promise.all(promises)
 				.then(() => {
-					if (this.layout.name === "pre-paginated" && this.layout.props.spread) {
-						return this.check();
-					}
+					return this.check();
 				})
 				.then(() => {
 					// Check to see if anything new is on screen after rendering
@@ -371,7 +369,11 @@ class ContinuousViewManager extends DefaultViewManager {
 			this.destroy();
 		}.bind(this));
 
-		this.addScrollListeners();
+        this.addScrollListeners();
+        
+        if (this.isPaginated && this.settings.snap) {
+			this.snapper = new Snap(this, this.settings.snap && (typeof this.settings.snap === "object") && this.settings.snap);
+		}
 	}
 
 	addScrollListeners() {
@@ -398,9 +400,11 @@ class ContinuousViewManager extends DefaultViewManager {
 			scroller = window;
 			this.scrollTop = window.scrollY;
 			this.scrollLeft = window.scrollX;
-		}
+        }
 
-		scroller.addEventListener("scroll", this.onScroll.bind(this));
+        this._onScroll = this.onScroll.bind(this);
+		scroller.addEventListener("scroll", this._onScroll);
+
 		this._scrolled = debounce(this.scrolled.bind(this), 30);
 		// this.tick.call(window, this.onScroll.bind(this));
 
@@ -417,7 +421,8 @@ class ContinuousViewManager extends DefaultViewManager {
 			scroller = window;
 		}
 
-		scroller.removeEventListener("scroll", this.onScroll.bind(this));
+		scroller.removeEventListener("scroll", this._onScroll);
+		this._onScroll = undefined;
 	}
 
 	onScroll(){
@@ -456,6 +461,7 @@ class ContinuousViewManager extends DefaultViewManager {
 			this.scrollDeltaHorz = 0;
 		}.bind(this), 150);
 
+        clearTimeout(this.afterScrolled);
 
 		this.didScroll = false;
 
@@ -473,11 +479,17 @@ class ContinuousViewManager extends DefaultViewManager {
 
 		clearTimeout(this.afterScrolled);
 		this.afterScrolled = setTimeout(function () {
+            // Don't report scroll if we are about the snap
+            if (this.snapper && this.snapper.supportsTouch && this.snapper.needsSnap()) {
+				return;
+			}
+
+
 			this.emit(EVENTS.MANAGERS.SCROLLED, {
 				top: this.scrollTop,
 				left: this.scrollLeft
 			});
-		}.bind(this));
+		}.bind(this), this.settings.afterScrolledTimeout);
 	}
 
 	next(){
@@ -522,41 +534,37 @@ class ContinuousViewManager extends DefaultViewManager {
 		}.bind(this));
 	}
 
-	updateAxis(axis, forceUpdate){
+	// updateAxis(axis, forceUpdate){
+	//
+	// 	super.updateAxis(axis, forceUpdate);
+	//
+	// 	if (axis === "vertical") {
+	// 		this.settings.infinite = true;
+	// 	} else {
+	// 		this.settings.infinite = false;
+	// 	}
+	// }
 
-		if (!this.isPaginated) {
-			axis = "vertical";
-		}
+	updateFlow(flow){
+		if (this.rendered && this.snapper) {
+			this.snapper.destroy();
+			this.snapper = undefined;
+        }
+        
+        super.updateFlow(flow);
 
-		if (!forceUpdate && axis === this.settings.axis) {
-			return;
-		}
+        if (this.rendered && this.isPaginated && this.settings.snap) {
+			this.snapper = new Snap(this, this.settings.snap && (typeof this.settings.snap === "object") && this.settings.snap);
+        }
+    }
 
-		this.settings.axis = axis;
+    destroy(){
+		super.destroy();
 
-		this.stage && this.stage.axis(axis);
-
-		this.viewSettings.axis = axis;
-
-		if (this.mapping) {
-			this.mapping.axis(axis);
-		}
-
-		if (this.layout) {
-			if (axis === "vertical") {
-				this.layout.spread("none");
-			} else {
-				this.layout.spread(this.layout.settings.spread);
-			}
-		}
-
-		if (axis === "vertical") {
-			this.settings.infinite = true;
-		} else {
-			this.settings.infinite = false;
+		if (this.snapper) {
+			this.snapper.destroy();
 		}
 	}
-
 }
 
 export default ContinuousViewManager;

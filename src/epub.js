@@ -4,7 +4,7 @@ import EpubCFI from "./utils/epubcfi";
 import Contents from "./rendition/contents";
 import * as core from "./utils/core";
 import { EPUBJS_VERSION } from "./utils/constants";
-import "../libs/url/url-polyfill";
+import * as URLpolyfill from "url-polyfill";
 
 import Spine from "./book/spine";
 import IframeView from "./managers/views/iframe";

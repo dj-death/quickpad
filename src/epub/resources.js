@@ -26,19 +26,35 @@ import Path from "../utils/path";
  * @param {string} [options.inject]
  */
 class Resources {
-    constructor(resources, options) {
+    constructor(manifest, options) {
         this.settings = {
-            replacements: (options && options.replacements) || "blobUrl",
+            replacements: (options && options.replacements) || "base64",
+			archive: (options && options.archive),
+			resolver: (options && options.resolver),
+            request: (options && options.request)
+            
+            /*replacements: (options && options.replacements) || "blobUrl",
             archive: (options && options.archive),
             load: (options && options.load),
             url: (options && options.url),
             // path: (options && options.path),
-            inject: (options && options.inject) || {},
+            inject: (options && options.inject) || {},*/
         };
 
-        this.urlCache = {};
+        this.process(manifest);
+    }
 
-        this.resources = Object.assign({}, resources);
+        /**
+	 * Process resources
+	 * @param {Manifest} manifest
+	 */
+	process(manifest){
+
+        this.urlCache = {};
+        this.resources = Object.keys(manifest).
+			map(function (key){
+				return manifest[key];
+			});
 
         this.resourcesByHref = {};
 
@@ -57,8 +73,8 @@ class Resources {
             this.path = new Path("/");
         }
 
-        if (resources) {
-            this.split(resources);
+        if (manifest) {
+            this.split(manifest);
         }
     }
 

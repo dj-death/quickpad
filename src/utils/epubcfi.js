@@ -391,7 +391,7 @@ class EpubCFI {
 
 		// All steps in First equal to Second and First is Less Specific
 		if(stepsA.length < stepsB.length) {
-			return 1;
+			return -1;
 		}
 
 		// Compare the charecter offset of the text node
@@ -966,7 +966,8 @@ class EpubCFI {
 			} catch (e) {
 				missed = this.fixMiss(startSteps, start.terminal.offset, doc, needsIgnoring ? ignoreClass : null);
 				range.setStart(missed.container, missed.offset);
-			}
+            }
+            
 		} else {
 			console.log("No startContainer found for", this.toString());
 			// No start found

@@ -8,8 +8,7 @@ import Layout from "./layout";
 import Themes from "./themes";
 import Contents from "./contents";
 import Annotations from "./annotations";
-import { EVENTS, EPUBJS_VERSION } from "../utils/constants";
-
+import { EVENTS, DOM_EVENTS , EPUBJS_VERSION } from "../utils/constants";
 import Book from "../book/book";
 import Spine from "../book/spine";
 import Locations from "../epub/locations";
@@ -55,7 +54,8 @@ class Rendition {
 			stylesheet: null,
 			script: null,
 			worker: undefined,
-			workerScope: undefined
+            workerScope: undefined,
+			snap: false
 		});
 
 		extend(this.settings, options);
@@ -260,6 +260,19 @@ class Rendition {
 	 */
 	start(){
 
+        if (!this.settings.layout && (this.book.package.metadata.layout === "pre-paginated" || this.book.displayOptions.fixedLayout === "true")) {
+			this.settings.layout = "pre-paginated";
+		}
+		switch(this.book.package.metadata.spread) {
+			case 'none':
+				this.settings.spread = 'none';
+				break;
+			case 'both':
+				this.settings.spread = true;
+				break;
+		}
+
+
 		if(!this.manager) {
 			this.ViewManager = this.requireManager(this.settings.manager);
 			this.View = this.requireView(this.settings.view);
@@ -372,8 +385,9 @@ class Rendition {
 			target = this.locations.cfiFromPercentage(parseFloat(target));
 		}
 
-		section = this.findInSpine(target);
-
+        // section = this.findInSpine(target);
+        section = this.book.spine.get(target);
+        
 		if(!section){
 			displaying.reject(new Error("No Section Found"));
 			return displayed;
@@ -456,7 +470,7 @@ class Rendition {
 	 * Report resize events and display the last seen location
 	 * @private
 	 */
-	onResized(size){
+	onResized(size, epubcfi){
 
 		/**
 		 * Emit that the rendition has been resized
@@ -468,10 +482,10 @@ class Rendition {
 		this.emit(EVENTS.RENDITION.RESIZED, {
 			width: size.width,
 			height: size.height
-		});
+		}, epubcfi);
 
 		if (this.location && this.location.start) {
-			this.display(this.location.start.cfi);
+            this.display(epubcfi || this.location.start.cfi);
 		}
 
 	}
@@ -504,14 +518,14 @@ class Rendition {
 	 * @param {number} [width]
 	 * @param {number} [height]
 	 */
-	resize(width, height){
+	resize(width, height, epubcfi){
 		if (width) {
 			this.settings.width = width;
 		}
 		if (height) {
 			this.settings.height = width;
 		}
-		this.manager.resize(width, height);
+		this.manager.resize(width, height, epubcfi);
 	}
 
 	/**
@@ -636,9 +650,17 @@ class Rendition {
 	 */
 	spread(spread, min){
 
-		this._layout.spread(spread, min);
+        this.settings.spread = spread;
 
-		if (this.manager.isRendered()) {
+		if (min) {
+			this.settings.minSpreadWidth = min;
+		}
+
+		if (this._layout) {
+			this._layout.spread(spread, min);
+		}
+
+		if (this.manager && this.manager.isRendered()) {
 			this.manager.updateLayout();
 		}
 	}
@@ -859,9 +881,7 @@ class Rendition {
 	 * @param  {View} view
 	 */
 	passEvents(contents){
-		var listenedEvents = Contents.listenedEvents;
-
-		listenedEvents.forEach((e) => {
+        DOM_EVENTS.forEach((e) => {
 			contents.on(e, (ev) => this.triggerViewEvent(ev, contents));
 		});
 
@@ -941,15 +961,19 @@ class Rendition {
 			});
 		}
 
+        let computed = contents.window.getComputedStyle(contents.content, null);
+        let height = (contents.content.offsetHeight - (parseFloat(computed.paddingTop) + parseFloat(computed.paddingBottom))) * .95;
+        let horizontalPadding = parseFloat(computed.paddingLeft) + parseFloat(computed.paddingRight);
+
 		contents.addStylesheetRules({
 			"img" : {
-				"max-width": (this._layout.columnWidth ? this._layout.columnWidth + "px" : "100%") + "!important",
-				"max-height": (this._layout.height ? (this._layout.height * 0.6) + "px" : "60%") + "!important",
+                "max-width": (this._layout.columnWidth ? (this._layout.columnWidth - horizontalPadding) + "px" : "100%") + "!important",				"max-height": height + "px" + "!important",
 				"object-fit": "contain",
-				"page-break-inside": "avoid"
+                "page-break-inside": "avoid",
+                "box-sizing": "border-box"
 			},
 			"svg" : {
-				"max-width": (this._layout.columnWidth ? this._layout.columnWidth + "px" : "100%") + "!important",
+				"max-width": (this._layout.columnWidth ? (this._layout.columnWidth - horizontalPadding) + "px" : "100%") + "!important",
 				"max-height": (this._layout.height ? (this._layout.height * 0.6) + "px" : "60%") + "!important",
 				"page-break-inside": "avoid"
 			}

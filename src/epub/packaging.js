@@ -12,7 +12,9 @@ class Packaging {
 		this.ncxPath = "";
 		this.coverPath = "";
 		this.spineNodeIndex = 0;
-		this.spine = [];
+        this.spine = [];
+        
+        this.uniqueIdentifier = this.findUniqueIdentifier(packageDocument);
 		this.metadata = {};
 
 		if (packageDocument) {
@@ -80,26 +82,21 @@ class Packaging {
 	 */
 	parseMetadata(xml){
 		var metadata = {};
-
-
 		metadata.title = this.getElementText(xml, "title");
 		metadata.creator = this.getElementText(xml, "creator");
 		metadata.description = this.getElementText(xml, "description");
-
 		metadata.pubdate = this.getElementText(xml, "date");
-
 		metadata.publisher = this.getElementText(xml, "publisher");
-
 		metadata.identifier = this.getElementText(xml, "identifier");
 		metadata.language = this.getElementText(xml, "language");
 		metadata.rights = this.getElementText(xml, "rights");
-
 		metadata.modified_date = this.getPropertyText(xml, "dcterms:modified");
-
 		metadata.layout = this.getPropertyText(xml, "rendition:layout");
 		metadata.orientation = this.getPropertyText(xml, "rendition:orientation");
 		metadata.flow = this.getPropertyText(xml, "rendition:flow");
 		metadata.viewport = this.getPropertyText(xml, "rendition:viewport");
+		metadata.media_active_class = this.getPropertyText(xml, "media:active-class");
+		metadata.spread = this.getPropertyText(xml, "rendition:spread");
 
 		return metadata;
 	}
@@ -172,6 +169,29 @@ class Packaging {
 		});
 
 		return spine;
+    }
+    
+    /**
+	 * Find Unique Identifier
+	 * @private
+	 * @param  {node} packageXml
+	 * @return {string} Unique Identifier text
+	 */
+	findUniqueIdentifier(packageXml){
+		var uniqueIdentifierId = packageXml.documentElement.getAttribute("unique-identifier");
+		if (! uniqueIdentifierId) {
+			return "";
+		}
+		var identifier = packageXml.getElementById(uniqueIdentifierId);
+		if (! identifier) {
+			return "";
+		}
+
+		if (identifier.localName === "identifier" && identifier.namespaceURI === "http://purl.org/dc/elements/1.1/") {
+            return identifier.childNodes.length > 0 ? identifier.childNodes[0].nodeValue.trim() : "";
+		}
+
+		return "";
 	}
 
 	/**
@@ -284,7 +304,8 @@ class Packaging {
 	load(json) {
 		this.metadata = json.metadata;
 
-		this.spine = json.spine.map((item, index) =>{
+        let spine = json.readingOrder || json.spine;
+        this.spine = spine.map((item, index) => {
 			let id = item.idref;
 
 			if (!id) {

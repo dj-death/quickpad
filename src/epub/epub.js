@@ -16,6 +16,9 @@ import PageList from "./pagelist";
 import Archive from "./archive";
 import request from "../utils/request";
 import EpubCFI from "../utils/epubcfi";
+import Store from "./store";
+
+
 import {
     EVENTS,
     EPUBJS_VERSION
@@ -52,7 +55,8 @@ class Epub {
         // Allow passing just options to the Book
         if (typeof(options) === "undefined" &&
 			  typeof(url) !== "string" &&
-		    url instanceof Blob === false) {
+              url instanceof Blob === false &&
+              url instanceof ArrayBuffer === false) {
 			options = url;
 			url = undefined;
 		}
@@ -64,7 +68,8 @@ class Epub {
 			encoding: undefined,
 			replacements: undefined,
 			canonical: undefined,
-			openAs: undefined
+            openAs: undefined,
+            store: undefined
         });
 
         extend(this.settings, options);
@@ -131,6 +136,17 @@ class Epub {
          */
         this.pageList = undefined;
 
+        /**
+		 * @member {Store} storage
+		 * @memberof Book
+		 * @private
+		 */
+        this.storage = undefined;
+        
+        if (this.settings.store) {
+            this.store(this.settings.store);
+		}
+
         if (url) {
             this.open(url, this.settings.openAs).catch((error) => {
                 var err = new Error("Cannot load book at " + url);
@@ -176,8 +192,10 @@ class Epub {
             this.archived = true;
             this.url = new Url("/", "");
             this.locationUrl = new Url(input, inputLocation);
-            opening = this.request(input, "binary")
-                .then(this.openEpub.bind(this));
+           /*opening = this.request(input, "binary")
+                .then(this.openEpub.bind(this));*/
+            opening = this.request(input, "binary", this.settings.requestCredentials, this.settings.requestHeaders)
+				.then(this.openEpub.bind(this));
         } else if (type == INPUT_TYPE.OPF) {
             this.url = new Url(input);
             this.locationUrl = new Url(input);
@@ -267,13 +285,11 @@ class Epub {
      * @return {Promise}     returns a promise with the requested resource
      */
     load(path, type) {
-        var resolved;
+        var resolved = this.resolve(path);
 
         if (this.archived) {
-            resolved = this.resolve(path);
             return this.archive.request(resolved, type);
         } else {
-            resolved = this.resolve(path);
             return this.request(resolved, type, this.settings.requestCredentials, this.settings.requestHeaders);
         }
     }
@@ -315,36 +331,35 @@ class Epub {
      */
     determineType(input) {
         var url;
-        var path;
-        var extension;
+		var path;
+		var extension;
+		if (this.settings.encoding === "base64") {
+			return INPUT_TYPE.BASE64;
+		}
+		if(typeof(input) != "string") {
+			return INPUT_TYPE.BINARY;
+		}
+		url = new Url(input);
+		path = url.path();
+		extension = path.extension;
 
-        if (this.settings.encoding === "base64") {
-            return INPUT_TYPE.BASE64;
-        }
+		// If there's a search string, remove it before determining type
+		if (extension) {
+			extension = extension.replace(/\?.*$/, "");
+		}
 
-        if (typeof (input) != "string") {
-            return INPUT_TYPE.BINARY;
-        }
-
-        url = new Url(input);
-        path = url.path();
-        extension = path.extension;
-
-        if (!extension) {
-            return INPUT_TYPE.DIRECTORY;
-        }
-
-        if (extension === "epub") {
-            return INPUT_TYPE.EPUB;
-        }
-
-        if (extension === "opf") {
-            return INPUT_TYPE.OPF;
-        }
-
-        if (extension === "json") {
-            return INPUT_TYPE.MANIFEST;
-        }
+		if (!extension) {
+			return INPUT_TYPE.DIRECTORY;
+		}
+		if(extension === "epub"){
+			return INPUT_TYPE.EPUB;
+		}
+		if(extension === "opf"){
+			return INPUT_TYPE.OPF;
+		}
+		if(extension === "json"){
+			return INPUT_TYPE.MANIFEST;
+		}
     }
 
 
@@ -366,7 +381,11 @@ class Epub {
             url = new Url(path);
         }
 
-        this.resources = new Resources(this.package.manifest, {
+        //DIDI
+        //this.spine.unpack(this.packaging, this.resolve.bind(this), this.canonical.bind(this));
+
+        this.resources = new Resources(this.packaging.manifest, {
+        // this.resources = new Resources(this.package.manifest, {
             archive: this.archive,
             url: url,
             load: this.load.bind(this),
@@ -439,7 +458,7 @@ class Epub {
         }
 
         return Promise.all(processed).then(() => {
-                return this.loadNavigation(this.package).then(() => {
+                return this.loadNavigation(this.packaging).then(() => {
                     return this.navigation;
                 });
             })
@@ -495,19 +514,30 @@ class Epub {
      * @private
      * @param {document} opf XML Document
      */
-    loadNavigation(opf) {
-        let navPath = opf.navPath || opf.ncxPath;
-        let toc = opf.toc;
+    loadNavigation(packaging) {
+		let navPath = packaging.navPath || packaging.ncxPath;
+		let toc = packaging.toc;
 
-        if (!navPath) {
+        if (toc) {
             return new Promise((resolve, reject) => {
-                this.navigation = new Navigation(null);
-                this.pageList = new PageList();
+                this.navigation = new Navigation(toc);
 
-                resolve(this.navigation);
+                if (packaging.pageList) {
+					this.pageList = new PageList(packaging.pageList); // TODO: handle page lists from Manifest
+				}
+
+				resolve(this.navigation);
             });
         }
 
+        if (!navPath) {
+			return new Promise((resolve, reject) => {
+				this.navigation = new Navigation(xml);
+				this.pageList = new PageList(xml);
+				return this.navigation;
+			});
+        }
+        
         return this.load(navPath, "xml")
             .then((xml) => {
                 this.navigation = new Navigation(xml, this.resolve(navPath));
@@ -616,12 +646,67 @@ class Epub {
     }
 
     /**
+	 * Store the epubs contents
+	 * @private
+	 * @param  {binary} input epub data
+	 * @param  {string} [encoding]
+	 * @return {Store}
+	 */
+	store(name) {
+		// Use "blobUrl" or "base64" for replacements
+		let replacementsSetting = this.settings.replacements && this.settings.replacements !== "none";
+		// Save original url
+		let originalUrl = this.url;
+		// Save original request method
+		let requester = this.settings.requestMethod || request.bind(this);
+		// Create new Store
+		this.storage = new Store(name, requester, this.resolve.bind(this));
+		// Replace request method to go through store
+		this.request = this.storage.request.bind(this.storage);
+
+		this.opened.then(() => {
+			if (this.archived) {
+				this.storage.requester = this.archive.request.bind(this.archive);
+			}
+			// Substitute hook
+			let substituteResources = (output, section) => {
+				section.output = this.resources.substitute(output, section.url);
+			};
+
+			// Set to use replacements
+			this.resources.settings.replacements = replacementsSetting || "blobUrl";
+			// Create replacement urls
+			this.resources.replacements().
+				then(() => {
+					return this.resources.replaceCss();
+				});
+
+			this.storage.on("offline", () => {
+				// Remove url to use relative resolving for hrefs
+				this.url = new Url("/", "");
+				// Add hook to replace resources in contents
+				this.spine.hooks.serialize.register(substituteResources);
+			});
+
+			this.storage.on("online", () => {
+				// Restore original url
+				this.url = originalUrl;
+				// Remove hook
+				this.spine.hooks.serialize.deregister(substituteResources);
+			});
+
+		});
+
+		return this.storage;
+	}
+
+    /**
      * Generates the Book Key using the identifer in the manifest or other string provided
      * @param  {string} [identifier] to use instead of metadata identifier
      * @return {string} key
      */
     key(identifier) {
-        var ident = identifier || this.package.metadata.identifier || this.url.filename;
+        var ident = identifier || this.packaging.metadata.identifier || this.url.filename;
         return `epubjs-${EPUBJS_VERSION}-${ident}`;
     }
 
